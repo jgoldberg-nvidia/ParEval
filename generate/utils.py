@@ -457,7 +457,25 @@ class ChatMLConfig(InferenceConfig):
     def clean_output(self, output: str, prompt: str) -> str:
         return clean_instruct_output(output, prompt,"<|im_start|>assistant\n")
 
-def get_inference_config(model_name : str, **kwargs) -> InferenceConfig:
+CONFIG_CLASSES = {
+    'starcoder': StarCoderConfig,
+    'codellama': CodeLlamaConfig,
+    'polycoder': PolyCoderConfig,
+    'phind': PhindConfig,
+    'replit': ReplitConfig,
+    'magicoder': MagicoderConfig,
+    'deepseek': DeepSeekBaseConfig,
+    'instruct': InstructConfig,
+    'qwen': QwenConfig,
+    'chatml': ChatMLConfig,
+}
+
+def get_inference_config(model_name : str, config_override : str = None, **kwargs) -> InferenceConfig:
+    if config_override:
+        if config_override not in CONFIG_CLASSES:
+            raise ValueError(f"Unknown config: {config_override}. Available: {list(CONFIG_CLASSES.keys())}")
+        return CONFIG_CLASSES[config_override](**kwargs)
+
     if model_name == "bigcode/starcoderbase":
         return StarCoderConfig(**kwargs)
     elif model_name in ["bigcode/starcoder2-3b", "bigcode/starcoder2-7b", "bigcode/starcoder2-15b"]:

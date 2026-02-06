@@ -33,6 +33,9 @@ parser.add_argument('--top_p', type=float, default=0.95, help='Top p value for n
 parser.add_argument('--do_sample', action='store_true', help='Enable sampling (default: False)')
 parser.add_argument('--batch_size', type=int, default=16, help='Batch size for generation (default: 8)')
 parser.add_argument('--prompted', action='store_true', help='Use prompted generation. See StarCoder paper (default: False)')
+parser.add_argument('--hf_token', type=str, help='HuggingFace API token for loading models')
+parser.add_argument('--inference-config', choices=['starcoder', 'codellama', 'polycoder', 'phind', 'replit', 'magicoder', 'deepseek', 'instruct', 'qwen', 'chatml'],
+                    help='Override automatic inference config detection')
 args = parser.parse_args()
 
 """ Load prompts """
@@ -40,7 +43,7 @@ with open(args.prompts, 'r') as json_file:
     prompts = json.load(json_file)
 
 """ Load existing responses if they exist """
-if not args.restart and os.path.exists(args.cache):
+if not args.restart and args.cache and os.path.exists(args.cache):
     with open(args.cache, 'r') as jsonl_file:
         responses = [json.loads(line) for line in jsonl_file]
     
@@ -90,14 +93,14 @@ if not args.restart and args.restore_from and os.path.exists(args.restore_from):
 
 
 """ Initialize inference config """
-inference_config = get_inference_config(args.model, prompted=args.prompted)
+inference_config = get_inference_config(args.model, config_override=getattr(args, 'inference_config', None), prompted=args.prompted)
 
 # to use a torch.utils.data.DataSet with the HuggingFace pipeline, we need to flatten out the prompts
 # and repeat them for however many samples we want to generate per prompt
 prompts_repeated = [p for p in prompts for _ in range(args.num_samples_per_prompt)]
 
 """ Initialize HuggingFace pipeline for generation """
-generator = pipeline(model=args.model, torch_dtype=inference_config.get_dtype(), device=0)
+generator = pipeline(task="text-generation", model=args.model, torch_dtype=inference_config.get_dtype(), device=0, token=args.hf_token)
 inference_config.init_padding(generator.tokenizer)
 
 """ Create a prompt data set to pass to generate method """

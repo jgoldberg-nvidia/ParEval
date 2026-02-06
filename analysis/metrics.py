@@ -94,13 +94,19 @@ def speedupk(df: pd.DataFrame, k: int, n: int) -> pd.DataFrame:
     df = df[df["is_valid"] == True]
 
     # choose processor count; hardcoded right now
-    df = df[(df["parallelism_model"] == "serial") |
+    # Build filter conditions based on available columns
+    conditions = ((df["parallelism_model"] == "serial") |
             (df["parallelism_model"] == "cuda") |
             (df["parallelism_model"] == "hip") |
             ((df["parallelism_model"] == "kokkos") & (df["num_threads"] == 32)) |
-            ((df["parallelism_model"] == "omp") & (df["num_threads"] == 32)) |
-            ((df["parallelism_model"] == "mpi") & (df["num_procs"] == 512)) |
-            ((df["parallelism_model"] == "mpi+omp") & (df["num_procs"] == 4) & (df["num_threads"] == 64))]
+            ((df["parallelism_model"] == "omp") & (df["num_threads"] == 32)))
+    
+    # Only add MPI conditions if num_procs column exists
+    if "num_procs" in df.columns:
+        conditions = conditions | ((df["parallelism_model"] == "mpi") & (df["num_procs"] == 512))
+        conditions = conditions | ((df["parallelism_model"] == "mpi+omp") & (df["num_procs"] == 4) & (df["num_threads"] == 64))
+    
+    df = df[conditions]
     df = df.copy()
 
     # use min best_sequential_runtime
@@ -183,13 +189,19 @@ def efficiencyk(df: pd.DataFrame, k: int, n: int) -> pd.DataFrame:
     df = df[df["is_valid"] == True]
 
     # choose processor count; hardcoded right now
-    df = df[(df["parallelism_model"] == "serial") |
+    # Build filter conditions based on available columns
+    conditions = ((df["parallelism_model"] == "serial") |
            (df["parallelism_model"] == "cuda") |
             (df["parallelism_model"] == "hip") |
             ((df["parallelism_model"] == "kokkos") & (df["num_threads"] == 32)) |
-            ((df["parallelism_model"] == "omp") & (df["num_threads"] == 32)) |
-            ((df["parallelism_model"] == "mpi") & (df["num_procs"] == 512)) |
-            ((df["parallelism_model"] == "mpi+omp") & (df["num_procs"] == 4) & (df["num_threads"] == 64))]
+            ((df["parallelism_model"] == "omp") & (df["num_threads"] == 32)))
+    
+    # Only add MPI conditions if num_procs column exists
+    if "num_procs" in df.columns:
+        conditions = conditions | ((df["parallelism_model"] == "mpi") & (df["num_procs"] == 512))
+        conditions = conditions | ((df["parallelism_model"] == "mpi+omp") & (df["num_procs"] == 4) & (df["num_threads"] == 64))
+    
+    df = df[conditions]
 
     # set n_resources column to 1 for serial; 32 for kokkos; 32 for omp; 512 for mpi; 4*64 for mpi+omp;
     # set it to problem_size for cuda and hip
@@ -198,8 +210,9 @@ def efficiencyk(df: pd.DataFrame, k: int, n: int) -> pd.DataFrame:
     df.loc[df["parallelism_model"] == "hip", "n_resources"] = df["problem_size"]
     df.loc[df["parallelism_model"] == "kokkos", "n_resources"] = 32
     df.loc[df["parallelism_model"] == "omp", "n_resources"] = 8
-    df.loc[df["parallelism_model"] == "mpi", "n_resources"] = 512
-    df.loc[df["parallelism_model"] == "mpi+omp", "n_resources"] = 4*64
+    if "num_procs" in df.columns:
+        df.loc[df["parallelism_model"] == "mpi", "n_resources"] = 512
+        df.loc[df["parallelism_model"] == "mpi+omp", "n_resources"] = 4*64
 
     df = df.copy()
 
@@ -230,8 +243,9 @@ def efficiencyk_max(df: pd.DataFrame, k: int) -> pd.DataFrame:
     df.loc[df["parallelism_model"] == "hip", "n_resources"] = df["problem_size"]
     df.loc[df["parallelism_model"] == "kokkos", "n_resources"] = df["num_threads"]
     df.loc[df["parallelism_model"] == "omp", "n_resources"] = df["num_threads"]
-    df.loc[df["parallelism_model"] == "mpi", "n_resources"] = df["num_procs"]
-    df.loc[df["parallelism_model"] == "mpi+omp", "n_resources"] = df["num_procs"] * df["num_threads"]
+    if "num_procs" in df.columns:
+        df.loc[df["parallelism_model"] == "mpi", "n_resources"] = df["num_procs"]
+        df.loc[df["parallelism_model"] == "mpi+omp", "n_resources"] = df["num_procs"] * df["num_threads"]
 
     # choose the row with min num_resources * runtime
     df = df.groupby(["name", "parallelism_model", "output_idx"]).apply(

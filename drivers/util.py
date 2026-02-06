@@ -1,7 +1,9 @@
 import json
 import logging
+import os
 from os import PathLike
 import shlex
+import signal
 import subprocess
 from subprocess import CompletedProcess
 from typing import Optional
@@ -30,10 +32,23 @@ def mean(iterable) -> float:
     return sum(iterable) / len(iterable) if len(iterable) > 0 else 0
 
 def run_command(cmd: str, timeout: Optional[int] = None, dry: bool = False) -> CompletedProcess:
-    """ Run the given command on the system and return the result """
     logging.debug(f"Running command: {cmd}")
     if dry:
         return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-    else:
-        cmd = shlex.split(cmd)
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    
+    cmd_args = shlex.split(cmd)
+    process = subprocess.Popen(
+        cmd_args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True
+    )
+    
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return CompletedProcess(args=cmd, returncode=process.returncode, stdout=stdout, stderr=stderr)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        raise
