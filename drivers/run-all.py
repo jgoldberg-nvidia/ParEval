@@ -137,19 +137,19 @@ def main():
     if args.exclude_models:
         models_to_test = [m for m in models_to_test if m not in args.exclude_models]
 
+    # filter data by problem type or problem name first (so output only contains relevant prompts)
+    if args.problem:
+        data = [p for p in data if p["name"] == args.problem]
+        logging.info(f"Filtered to {len(data)} prompts matching problem '{args.problem}'.")
+    elif args.problem_type:
+        data = [p for p in data if p["problem_type"] == args.problem_type]
+        logging.info(f"Filtered to {len(data)} prompts matching problem type '{args.problem_type}'.")
+
     # run each prompt
     all_prompts = data if args.hide_progress else tqdm(data, desc="Testing prompts")
     for prompt in all_prompts:
         if prompt["parallelism_model"] not in models_to_test:
             logging.debug(f"Skipping prompt {prompt['name']} because it uses {prompt['parallelism_model']}.")
-            continue
-
-        if args.problem and prompt["name"] != args.problem:
-            logging.debug(f"Skipping prompt {prompt['name']} because it is not {args.problem}.")
-            continue
-
-        if args.problem_type and prompt["problem_type"] != args.problem_type:
-            logging.debug(f"Skipping prompt {prompt['name']} because it is not {args.problem_type}.")
             continue
 
         if already_has_results(prompt):

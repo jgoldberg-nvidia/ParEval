@@ -2,14 +2,14 @@
 #SBATCH --job-name=pareval-test
 #SBATCH --output=pareval-test_%j.out
 #SBATCH --error=pareval-test_%j.err
-#SBATCH --time=8:00:00
+#SBATCH --time=18:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:b200:1
 
 # ============================================================================
 # ParEval Benchmark - TEST SCRIPT (Evaluation Only)
-# 
+#
 # Uses pyxis/enroot to run in container with mounted outputs file
 # Skips generation phase, only runs evaluation and metrics
 # Supports parallel execution by problem type
@@ -25,7 +25,7 @@
 #   sbatch slurm-pareval-test.sh deepseek-outputs.json "serial,omp,cuda" geometry
 #   sbatch slurm-pareval-test.sh deepseek-outputs.json "serial,omp,cuda" sort
 #
-# Problem types: dense_la, fft, geometry, graph, histogram, reduce, 
+# Problem types: dense_la, fft, geometry, graph, histogram, reduce,
 #                scan, search, sort, sparse_la, stencil, transform
 #
 # ============================================================================
@@ -97,7 +97,7 @@ echo '[Setup] Cloning ParEval repository...'
 if [ -d 'ParEval' ]; then
     cd ParEval && git pull --quiet && cd ..
 else
-    git clone --recurse-submodules https://github.com/parallelcodefoundry/ParEval.git
+    git clone --recurse-submodules https://github.com/jgoldberg-nvidia/ParEval.git
 fi
 
 cd ParEval

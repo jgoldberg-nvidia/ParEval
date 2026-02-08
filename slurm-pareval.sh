@@ -1,284 +1,246 @@
 #!/bin/bash
-#SBATCH --job-name=pareval
-#SBATCH --output=pareval_%j.out
-#SBATCH --error=pareval_%j.err
-#SBATCH --time=48:00:00
+#SBATCH --job-name=pareval-test
+#SBATCH --output=pareval-test_%j.out
+#SBATCH --error=pareval-test_%j.err
+#SBATCH --time=18:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:b200:1
-#SBATCH --container-image=pytorch/pytorch:2.2.0-cuda12.1-cudnn8-devel
 
 # ============================================================================
-# ParEval Benchmark - Full Evaluation Suite (Slurm + Enroot)
-# 
-# Runs BOTH generation and translation tasks with all execution models
-# (excluding AMD HIP)
+# ParEval Benchmark - TEST SCRIPT (Evaluation Only)
+#
+# Uses pyxis/enroot to run in container with mounted outputs file
+# Skips generation phase, only runs evaluation and metrics
+# Supports parallel execution by problem type
 #
 # Usage:
-#   sbatch slurm-pareval.sh <model_name> <hf_token> [num_samples] [inference_config]
+#   sbatch slurm-pareval-test.sh [outputs_file] [include_models] [problem_type]
 #
 # Examples:
-#   sbatch slurm-pareval.sh deepseek-ai/deepseek-coder-6.7b-instruct hf_xxxxx
-#   sbatch slurm-pareval.sh Qwen/Qwen2.5-Coder-7B-Instruct hf_xxxxx 50 chatml
-#   sbatch slurm-pareval.sh bigcode/starcoder2-7b hf_xxxxx 50 starcoder
+#   # Run all problem types (slow)
+#   sbatch slurm-pareval-test.sh deepseek-outputs.json "serial,omp,cuda"
 #
-# Based on: https://doi.org/10.1145/3625549.3658689
+#   # Run single problem type (for parallel execution)
+#   sbatch slurm-pareval-test.sh deepseek-outputs.json "serial,omp,cuda" geometry
+#   sbatch slurm-pareval-test.sh deepseek-outputs.json "serial,omp,cuda" sort
+#
+# Problem types: dense_la, fft, geometry, graph, histogram, reduce,
+#                scan, search, sort, sparse_la, stencil, transform
+#
 # ============================================================================
 
 set -e
 
 # ============================================================================
-# Input Arguments
+# Configuration
 # ============================================================================
-MODEL_NAME="${1:?Error: Please provide model name as first argument}"
-HF_TOKEN="${2:?Error: Please provide HuggingFace token as second argument}"
-NUM_SAMPLES="${3:-50}"
-INFERENCE_CONFIG="${4:-instruct}"
+CONTAINER_IMAGE="nvcr.io#nvidia/pytorch:25.12-py3"
+INPUT_DIR="${HOME}/benchmarks/pareval"
+OUTPUTS_FILE="${1:-deepseek-outputs.json}"
+INCLUDE_MODELS="${2:-serial,omp,cuda}"
+PROBLEM_TYPE="${3:-}"  # Optional: specific problem type to test
 
-# Execution models to test (excluding AMD HIP)
-INCLUDE_MODELS="serial,omp,mpi,mpi+omp,kokkos,cuda"
+MODEL_SHORT=$(basename "${OUTPUTS_FILE}" .json)
 
-# Derived variables
-MODEL_SHORT=$(echo "${MODEL_NAME}" | sed 's/.*\///' | sed 's/[^a-zA-Z0-9]/-/g')
-WORK_DIR="/workspace"
-SCRATCH_DIR="/tmp/pareval_${SLURM_JOB_ID}"
-OUTPUT_DIR="${WORK_DIR}/results/${MODEL_SHORT}_${SLURM_JOB_ID}"
+# Shared output directory for all jobs (no job ID suffix)
+OUTPUT_BASE="${INPUT_DIR}/results/${MODEL_SHORT}"
 
 echo "=========================================="
-echo "ParEval Benchmark"
+echo "ParEval Benchmark - TEST MODE"
 echo "=========================================="
-echo "Model:       ${MODEL_NAME}"
-echo "Config:      ${INFERENCE_CONFIG}"
-echo "Samples:     ${NUM_SAMPLES}"
-echo "Job ID:      ${SLURM_JOB_ID}"
-echo "Node:        ${SLURMD_NODENAME}"
-echo "Start:       $(date)"
+echo "Container:        ${CONTAINER_IMAGE}"
+echo "Input dir:        ${INPUT_DIR}"
+echo "Outputs file:     ${OUTPUTS_FILE}"
+echo "Include models:   ${INCLUDE_MODELS}"
+echo "Problem type:     ${PROBLEM_TYPE:-ALL}"
+echo "Output dir:       ${OUTPUT_BASE}"
+echo "Job ID:           ${SLURM_JOB_ID}"
+echo "Node:             ${SLURMD_NODENAME}"
+echo "Start:            $(date)"
 echo "=========================================="
+
+# ============================================================================
+# Run everything inside container via srun + enroot
+# ============================================================================
+srun --container-image="${CONTAINER_IMAGE}" \
+     --container-mounts="${INPUT_DIR}:/workspace/inputs" \
+     bash -c "
+set -e
+
+OUTPUTS_FILE='/workspace/inputs/${OUTPUTS_FILE}'
+INCLUDE_MODELS='${INCLUDE_MODELS}'
+PROBLEM_TYPE='${PROBLEM_TYPE}'
+MODEL_SHORT='${MODEL_SHORT}'
+WORK_DIR='/workspace'
+SCRATCH_DIR='/tmp/pareval_${SLURM_JOB_ID}'
+OUTPUT_DIR='/workspace/inputs/results/${MODEL_SHORT}'
+
+mkdir -p \"\${OUTPUT_DIR}\" \"\${SCRATCH_DIR}\"
 
 # ============================================================================
 # Setup Environment
 # ============================================================================
-echo ""
-echo "[Setup] Installing system dependencies..."
+echo ''
+echo '[Setup] Verifying build tools...'
 
-apt-get update -qq
-apt-get install -y -qq git build-essential cmake libopenmpi-dev openmpi-bin > /dev/null
+which git g++ make || { echo 'ERROR: Missing required build tools'; exit 1; }
+echo '[Setup] Build tools available'
 
-cd "${WORK_DIR}"
+cd \"\${WORK_DIR}\"
 
 # ============================================================================
 # Clone ParEval
 # ============================================================================
-echo "[Setup] Cloning ParEval repository..."
+echo '[Setup] Cloning ParEval repository...'
 
-if [ -d "ParEval" ]; then
-    cd ParEval && git pull && cd ..
+if [ -d 'ParEval' ]; then
+    cd ParEval && git pull --quiet && cd ..
 else
-    git clone --recurse-submodules https://github.com/parallelcodefoundry/ParEval.git
+    git clone --recurse-submodules https://github.com/jgoldberg-nvidia/ParEval.git
 fi
 
 cd ParEval
-mkdir -p "${OUTPUT_DIR}" "${SCRATCH_DIR}"
 
 # ============================================================================
 # Install Python Dependencies
 # ============================================================================
-echo "[Setup] Installing Python dependencies..."
-
-pip install --quiet --upgrade pip
-pip install --quiet -r requirements.txt
-pip install --quiet --upgrade transformers
-
-# ============================================================================
-# Build Kokkos (with CUDA support if available)
-# ============================================================================
-echo "[Setup] Building Kokkos..."
-
-cd tpl/kokkos
-if [ ! -f "build/lib/libkokkoscore.a" ]; then
-    mkdir -p build && cd build
-    
-    # Check if CUDA is available for Kokkos GPU backend
-    if command -v nvcc &>/dev/null; then
-        echo "[Setup] Building Kokkos with CUDA backend..."
-        cmake .. \
-            -DCMAKE_INSTALL_PREFIX=. \
-            -DKokkos_ENABLE_CUDA=ON \
-            -DKokkos_ENABLE_CUDA_LAMBDA=ON \
-            -DKokkos_ENABLE_THREADS=ON > /dev/null
-    else
-        echo "[Setup] Building Kokkos with threads backend only..."
-        cmake .. \
-            -DCMAKE_INSTALL_PREFIX=. \
-            -DKokkos_ENABLE_THREADS=ON > /dev/null
-    fi
-    
-    make install -j${SLURM_CPUS_PER_TASK:-8} > /dev/null 2>&1
-    cd ..
-fi
-cd "${WORK_DIR}/ParEval"
+echo '[Setup] Installing Python dependencies...'
+pip install --quiet tqdm 2>/dev/null || true
 
 # ============================================================================
 # Build C++ Drivers
 # ============================================================================
-echo "[Setup] Building C++ drivers..."
+echo '[Setup] Building C++ drivers...'
 
 cd drivers/cpp
-make -j${SLURM_CPUS_PER_TASK:-8} > /dev/null 2>&1 || true
-cd "${WORK_DIR}/ParEval"
-
-echo "[Setup] Complete!"
+make -j\${SLURM_CPUS_PER_TASK:-8} > /dev/null 2>&1 || true
+cd \"\${WORK_DIR}/ParEval\"
 
 # ============================================================================
-# Step 1: Generate LLM Outputs (Generation Task)
+# Create local launch config (no srun - we're already inside container)
 # ============================================================================
-echo ""
-echo "=========================================="
-echo "[1/5] Generating LLM outputs (generation task)"
-echo "=========================================="
+cat > drivers/local-launch-configs.json << 'LAUNCH_EOF'
+{
+    \"serial\": {
+        \"format\": \"{exec_path} {args}\",
+        \"params\": [{}]
+    },
+    \"omp\": {
+        \"format\": \"{exec_path} {args} {num_threads}\",
+        \"params\": [
+            {\"num_threads\": 1},
+            {\"num_threads\": 2},
+            {\"num_threads\": 4},
+            {\"num_threads\": 8}
+        ]
+    },
+    \"cuda\": {
+        \"format\": \"{exec_path} {args}\",
+        \"params\": [{}]
+    }
+}
+LAUNCH_EOF
 
-python generate/generate.py \
-    --prompts prompts/generation-prompts.json \
-    --model "${MODEL_NAME}" \
-    --output "${OUTPUT_DIR}/generation-outputs.json" \
-    --cache "${OUTPUT_DIR}/generation-cache.jsonl" \
-    --inference-config "${INFERENCE_CONFIG}" \
-    --hf_token "${HF_TOKEN}" \
-    --prompted \
-    --do_sample \
-    --num_samples_per_prompt ${NUM_SAMPLES} \
-    --temperature 0.2 \
-    --top_p 0.95 \
-    --max_new_tokens 1024 \
-    --batch_size 16
-
-echo "[1/5] Generation complete: ${OUTPUT_DIR}/generation-outputs.json"
+echo '[Setup] Complete!'
 
 # ============================================================================
-# Step 2: Evaluate Generated Code (Generation Task)
+# Verify outputs file exists
 # ============================================================================
-echo ""
-echo "=========================================="
-echo "[2/5] Evaluating generated code (generation task)"
-echo "=========================================="
+if [ ! -f \"\${OUTPUTS_FILE}\" ]; then
+    echo 'ERROR: Outputs file not found:' \"\${OUTPUTS_FILE}\"
+    echo 'Available files in /workspace/inputs:'
+    ls -la /workspace/inputs/
+    exit 1
+fi
+
+echo ''
+echo 'Using outputs file:' \"\${OUTPUTS_FILE}\"
+PROMPT_COUNT=\$(python -c \"import json; print(len(json.load(open('\${OUTPUTS_FILE}'))))\")
+echo \"Found \${PROMPT_COUNT} prompts in outputs file\"
+
+# ============================================================================
+# Step 1: Evaluate Generated Code
+# ============================================================================
+echo ''
+echo '=========================================='
+echo '[1/2] Evaluating generated code'
+echo '=========================================='
 
 cd drivers
 
-echo "Testing execution models: ${INCLUDE_MODELS}"
+echo 'Testing execution models:' \"\${INCLUDE_MODELS}\"
+if [ -n \"\${PROBLEM_TYPE}\" ]; then
+    echo 'Problem type:' \"\${PROBLEM_TYPE}\"
+fi
 
-python run-all.py "${OUTPUT_DIR}/generation-outputs.json" \
-    --yes-to-all \
-    -o "${OUTPUT_DIR}/generation-results.json" \
-    --include-models ${INCLUDE_MODELS} \
-    --scratch-dir "${SCRATCH_DIR}" \
-    --build-timeout 60 \
-    --run-timeout 120
+# Convert comma-separated to space-separated for argparse
+MODELS_SPACED=\$(echo \"\${INCLUDE_MODELS}\" | tr ',' ' ')
 
-cd "${WORK_DIR}/ParEval"
+# Build the command with optional problem type
+PROBLEM_TYPE_ARG=\"\"
+RESULTS_SUFFIX=\"\"
+if [ -n \"\${PROBLEM_TYPE}\" ]; then
+    PROBLEM_TYPE_ARG=\"--problem-type \${PROBLEM_TYPE}\"
+    RESULTS_SUFFIX=\"_\${PROBLEM_TYPE}\"
+fi
 
-echo "[2/5] Generation evaluation complete: ${OUTPUT_DIR}/generation-results.json"
+python run-all.py \"\${OUTPUTS_FILE}\" \\
+    --yes-to-all \\
+    -o \"\${OUTPUT_DIR}/results\${RESULTS_SUFFIX}.json\" \\
+    --include-models \${MODELS_SPACED} \\
+    --launch-configs local-launch-configs.json \\
+    --scratch-dir \"\${SCRATCH_DIR}\" \\
+    --build-timeout 60 \\
+    --run-timeout 120 \\
+    \${PROBLEM_TYPE_ARG}
 
-# ============================================================================
-# Step 3: Generate LLM Outputs (Translation Task)
-# ============================================================================
-echo ""
-echo "=========================================="
-echo "[3/5] Generating LLM outputs (translation task)"
-echo "=========================================="
+cd \"\${WORK_DIR}/ParEval\"
 
-python generate/translate.py \
-    --prompts prompts/translation-prompts.json \
-    --model "${MODEL_NAME}" \
-    --output "${OUTPUT_DIR}/translation-outputs.json" \
-    --cache "${OUTPUT_DIR}/translation-cache.jsonl" \
-    --inference-config "${INFERENCE_CONFIG}" \
-    --hf_token "${HF_TOKEN}" \
-    --prompted \
-    --do_sample \
-    --num_samples_per_prompt ${NUM_SAMPLES} \
-    --temperature 0.2 \
-    --top_p 0.95 \
-    --max_new_tokens 1024 \
-    --batch_size 16
-
-echo "[3/5] Translation generation complete: ${OUTPUT_DIR}/translation-outputs.json"
+echo '[1/2] Evaluation complete:' \"\${OUTPUT_DIR}/results\${RESULTS_SUFFIX}.json\"
 
 # ============================================================================
-# Step 4: Evaluate Generated Code (Translation Task)
+# Step 2: Compute Metrics
 # ============================================================================
-echo ""
-echo "=========================================="
-echo "[4/5] Evaluating generated code (translation task)"
-echo "=========================================="
-
-cd drivers
-
-python run-all.py "${OUTPUT_DIR}/translation-outputs.json" \
-    --yes-to-all \
-    -o "${OUTPUT_DIR}/translation-results.json" \
-    --include-models ${INCLUDE_MODELS} \
-    --scratch-dir "${SCRATCH_DIR}" \
-    --build-timeout 60 \
-    --run-timeout 120
-
-cd "${WORK_DIR}/ParEval"
-
-echo "[4/5] Translation evaluation complete: ${OUTPUT_DIR}/translation-results.json"
-
-# ============================================================================
-# Step 5: Compute Metrics for Both Tasks
-# ============================================================================
-echo ""
-echo "=========================================="
-echo "[5/5] Computing metrics"
-echo "=========================================="
+echo ''
+echo '=========================================='
+echo '[2/2] Computing metrics'
+echo '=========================================='
 
 cd analysis
 
-# Generation task metrics
-echo "Computing metrics for generation task..."
-python create-dataframe.py "${OUTPUT_DIR}/generation-results.json" -o "${OUTPUT_DIR}/generation-results.csv"
-python metrics.py "${OUTPUT_DIR}/generation-results.csv" \
-    --problem-sizes ../drivers/problem-sizes.json \
-    --model-name "${MODEL_SHORT}" \
-    -o "${OUTPUT_DIR}/generation-metrics.csv" 2>&1 | tee "${OUTPUT_DIR}/generation-metrics.txt"
+python create-dataframe.py \"\${OUTPUT_DIR}/results\${RESULTS_SUFFIX}.json\" -o \"\${OUTPUT_DIR}/results\${RESULTS_SUFFIX}.csv\"
 
-# Translation task metrics
-echo "Computing metrics for translation task..."
-python create-dataframe.py "${OUTPUT_DIR}/translation-results.json" -o "${OUTPUT_DIR}/translation-results.csv"
-python metrics.py "${OUTPUT_DIR}/translation-results.csv" \
-    --problem-sizes ../drivers/problem-sizes.json \
-    --model-name "${MODEL_SHORT}" \
-    -o "${OUTPUT_DIR}/translation-metrics.csv" 2>&1 | tee "${OUTPUT_DIR}/translation-metrics.txt"
+python metrics.py \"\${OUTPUT_DIR}/results\${RESULTS_SUFFIX}.csv\" \\
+    --problem-sizes ../drivers/problem-sizes.json \\
+    --model-name \"\${MODEL_SHORT}\" \\
+    -o \"\${OUTPUT_DIR}/metrics\${RESULTS_SUFFIX}.csv\" 2>&1 | tee \"\${OUTPUT_DIR}/metrics\${RESULTS_SUFFIX}.txt\"
 
-cd "${WORK_DIR}/ParEval"
+cd \"\${WORK_DIR}/ParEval\"
 
-echo "[5/5] Metrics complete!"
+echo '[2/2] Metrics complete!'
 
 # ============================================================================
 # Summary
 # ============================================================================
-echo ""
-echo "=========================================="
-echo "ParEval Benchmark Complete!"
-echo "=========================================="
-echo "Model:            ${MODEL_NAME}"
-echo "Config:           ${INFERENCE_CONFIG}"
-echo "Samples/prompt:   ${NUM_SAMPLES}"
-echo "Execution models: ${INCLUDE_MODELS}"
-echo "Job ID:           ${SLURM_JOB_ID}"
-echo ""
-echo "Output files in: ${OUTPUT_DIR}/"
-ls -la "${OUTPUT_DIR}/"
-echo ""
-echo "============ GENERATION TASK METRICS ============"
-cat "${OUTPUT_DIR}/generation-metrics.txt" | tail -60
-echo ""
-echo "============ TRANSLATION TASK METRICS ============"
-cat "${OUTPUT_DIR}/translation-metrics.txt" | tail -60
+echo ''
+echo '=========================================='
+echo 'ParEval Test Complete!'
+echo '=========================================='
+echo 'Outputs file:' \"\${OUTPUTS_FILE}\"
+echo 'Models tested:' \"\${INCLUDE_MODELS}\"
+echo 'Problem type:' \"\${PROBLEM_TYPE:-ALL}\"
+echo ''
+echo 'Results saved to:' \"\${OUTPUT_DIR}/\"
+ls -la \"\${OUTPUT_DIR}/\"
+echo ''
+echo '============ METRICS ============'
+cat \"\${OUTPUT_DIR}/metrics\${RESULTS_SUFFIX}.txt\" | tail -60
+
+# Cleanup
+rm -rf \"\${SCRATCH_DIR}\"
+"
+
 echo ""
 echo "End time: $(date)"
 echo "=========================================="
-
-# Cleanup scratch directory
-rm -rf "${SCRATCH_DIR}"
