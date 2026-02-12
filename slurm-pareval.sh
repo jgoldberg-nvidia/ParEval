@@ -22,10 +22,10 @@
 #   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda"
 #
 #   # Run with specific CUDA architecture
-#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "" "sm_89"  # RTX 4090
-#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "" "sm_86"  # RTX 3090
-#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "" "sm_90"  # H100
-#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "" "sm_100" # B200
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "sm_89"  # RTX 4090
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "sm_86"  # RTX 3090
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "sm_90"  # H100
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "sm_100" # B200
 #
 #   # Run single problem type (for parallel execution)
 #   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" geometry "sm_80"
@@ -232,7 +232,8 @@ python run-all.py \"\${OUTPUTS_FILE}\" \\
     --launch-configs local-launch-configs.json \\
     --scratch-dir \"\${SCRATCH_DIR}\" \\
     --build-timeout 60 \\
-    --run-timeout 120 \\
+    --run-timeout 30 \\
+    --early-exit-runs \\
     \${PROBLEM_TYPE_ARG}
 
 cd \"\${WORK_DIR}/ParEval\"

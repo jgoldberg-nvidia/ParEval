@@ -49,6 +49,20 @@ def run_command(cmd: str, timeout: Optional[int] = None, dry: bool = False) -> C
         stdout, stderr = process.communicate(timeout=timeout)
         return CompletedProcess(args=cmd, returncode=process.returncode, stdout=stdout, stderr=stderr)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
-        process.wait()
+        _kill_process_tree(process)
         raise
+
+
+def _kill_process_tree(process: subprocess.Popen):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        try:
+            process.kill()
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        process.communicate(timeout=5)
+    except (subprocess.TimeoutExpired, OSError):
+        process.kill()
+        process.communicate()
