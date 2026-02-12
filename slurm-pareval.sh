@@ -15,15 +15,29 @@
 # Supports parallel execution by problem type
 #
 # Usage:
-#   sbatch slurm-pareval-test.sh [outputs_file] [include_models] [problem_type]
+#   sbatch slurm-pareval.sh [outputs_file] [include_models] [problem_type] [cuda_arch]
 #
 # Examples:
-#   # Run all problem types (slow)
-#   sbatch slurm-pareval-test.sh deepseek-outputs.json "serial,omp,cuda"
+#   # Run all problem types with default A100 architecture
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda"
+#
+#   # Run with specific CUDA architecture
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "" "sm_89"  # RTX 4090
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "" "sm_86"  # RTX 3090
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "" "sm_90"  # H100
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" "" "sm_100" # B200
 #
 #   # Run single problem type (for parallel execution)
-#   sbatch slurm-pareval-test.sh deepseek-outputs.json "serial,omp,cuda" geometry
-#   sbatch slurm-pareval-test.sh deepseek-outputs.json "serial,omp,cuda" sort
+#   sbatch slurm-pareval.sh deepseek-outputs.json "serial,omp,cuda" geometry "sm_80"
+#
+# CUDA Architectures:
+#   sm_70  - V100
+#   sm_75  - T4, RTX 2000 series
+#   sm_80  - A100 (default)
+#   sm_86  - RTX 3000 series
+#   sm_89  - RTX 4000 series, L40
+#   sm_90  - H100
+#   sm_100 - B200
 #
 # Problem types: dense_la, fft, geometry, graph, histogram, reduce,
 #                scan, search, sort, sparse_la, stencil, transform
@@ -40,6 +54,7 @@ INPUT_DIR="${HOME}/benchmarks/pareval"
 OUTPUTS_FILE="${1:-deepseek-outputs.json}"
 INCLUDE_MODELS="${2:-serial,omp,cuda}"
 PROBLEM_TYPE="${3:-}"  # Optional: specific problem type to test
+CUDA_ARCH="${4:-sm_80}"  # CUDA architecture (default: A100)
 
 MODEL_SHORT=$(basename "${OUTPUTS_FILE}" .json)
 
@@ -54,6 +69,7 @@ echo "Input dir:        ${INPUT_DIR}"
 echo "Outputs file:     ${OUTPUTS_FILE}"
 echo "Include models:   ${INCLUDE_MODELS}"
 echo "Problem type:     ${PROBLEM_TYPE:-ALL}"
+echo "CUDA arch:        ${CUDA_ARCH}"
 echo "Output dir:       ${OUTPUT_BASE}"
 echo "Job ID:           ${SLURM_JOB_ID}"
 echo "Node:             ${SLURMD_NODENAME}"
@@ -71,6 +87,7 @@ set -e
 OUTPUTS_FILE='/workspace/inputs/${OUTPUTS_FILE}'
 INCLUDE_MODELS='${INCLUDE_MODELS}'
 PROBLEM_TYPE='${PROBLEM_TYPE}'
+CUDA_ARCH='${CUDA_ARCH}'
 MODEL_SHORT='${MODEL_SHORT}'
 WORK_DIR='/workspace'
 SCRATCH_DIR='/tmp/pareval_${SLURM_JOB_ID}'
@@ -101,6 +118,29 @@ else
 fi
 
 cd ParEval
+
+# ============================================================================
+# Configure CUDA Architecture
+# ============================================================================
+echo '[Setup] Configuring CUDA architecture:' \"\${CUDA_ARCH}\"
+
+# Derive compute capability from sm_XX
+COMPUTE_CAP=\$(echo \"\${CUDA_ARCH}\" | sed 's/sm_/compute_/')
+
+# Update build-configs.json with the specified architecture
+python -c \"
+import json
+with open('drivers/build-configs.json', 'r') as f:
+    config = json.load(f)
+config['cuda']['CXXFLAGS'] = '-std=c++17 --generate-code arch=\${COMPUTE_CAP},code=\${CUDA_ARCH} -O3 -Xcompiler \\\"-std=c++17 -O3\\\"'
+with open('drivers/build-configs.json', 'w') as f:
+    json.dump(config, f, indent=4)
+print('Updated build-configs.json with CUDA arch: \${CUDA_ARCH}')
+\"
+
+# Also update cpp_driver_wrapper.py
+sed -i 's/arch=compute_[0-9]*,code=sm_[0-9]*/arch='\"\${COMPUTE_CAP}\"',code='\"\${CUDA_ARCH}\"'/g' drivers/cpp/cpp_driver_wrapper.py
+echo 'Updated cpp_driver_wrapper.py'
 
 # ============================================================================
 # Install Python Dependencies
@@ -230,6 +270,7 @@ echo '=========================================='
 echo 'Outputs file:' \"\${OUTPUTS_FILE}\"
 echo 'Models tested:' \"\${INCLUDE_MODELS}\"
 echo 'Problem type:' \"\${PROBLEM_TYPE:-ALL}\"
+echo 'CUDA arch:' \"\${CUDA_ARCH}\"
 echo ''
 echo 'Results saved to:' \"\${OUTPUT_DIR}/\"
 ls -la \"\${OUTPUT_DIR}/\"

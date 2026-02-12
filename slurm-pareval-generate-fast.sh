@@ -103,15 +103,12 @@ echo \"Total GPUs available: \${NUM_GPUS}\"
 cd \"\${WORK_DIR}\"
 
 # ============================================================================
-# Clone ParEval
+# Clone ParEval (fresh clone every time)
 # ============================================================================
 echo ''
-echo '[Setup] Cloning ParEval repository...'
-if [ -d 'ParEval' ]; then
-    cd ParEval && git pull --quiet && cd ..
-else
-    git clone --recurse-submodules https://jgoldberg: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@github.com/jgoldberg-nvidia/ParEval.git
-fi
+echo '[Setup] Cloning ParEval repository (fresh)...'
+rm -rf ParEval
+git clone --recurse-submodules https://jgoldberg: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@github.com/jgoldberg-nvidia/ParEval.git
 cd ParEval
 
 # ============================================================================
@@ -120,6 +117,10 @@ cd ParEval
 echo ''
 echo '[Setup] Installing Python dependencies...'
 pip install tqdm transformers accelerate sentencepiece
+
+echo ''
+echo '[Setup] Removing incompatible flash_attn from container...'
+pip uninstall -y flash_attn 2>/dev/null || true
 
 echo ''
 echo '[Setup] Installing vLLM (this may take 5-10 minutes)...'
@@ -141,6 +142,10 @@ elif [[ \"\${MODEL_NAME}\" == *'phind'* ]] || [[ \"\${MODEL_NAME}\" == *'Phind'*
     INFERENCE_CONFIG='phind'
 elif [[ \"\${MODEL_NAME}\" == *'magicoder'* ]]; then
     INFERENCE_CONFIG='magicoder'
+elif [[ \"\${MODEL_NAME}\" == *'Nemotron'* ]]; then
+    INFERENCE_CONFIG='chatml'
+elif [[ \"\${MODEL_NAME}\" == *'CodeQwen'* ]] && [[ \"\${MODEL_NAME}\" == *'Chat'* ]]; then
+    INFERENCE_CONFIG='chatml'
 elif [[ \"\${MODEL_NAME}\" == *'qwen'* ]] || [[ \"\${MODEL_NAME}\" == *'Qwen'* ]]; then
     INFERENCE_CONFIG='qwen'
 else

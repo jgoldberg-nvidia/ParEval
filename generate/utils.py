@@ -500,8 +500,12 @@ def get_inference_config(model_name : str, config_override : str = None, **kwarg
         return ChatMLConfig(**kwargs)
     elif model_name.startswith('Qwen/Qwen3'):
         return ChatMLConfig(**kwargs)
+    elif model_name.startswith('Qwen/CodeQwen') and 'Chat' in model_name:
+        return ChatMLConfig(**kwargs)
     elif model_name.startswith('Qwen/Qwen2.5'):
         return QwenConfig(**kwargs)
+    elif model_name.startswith('nvidia/OpenCodeReasoning-Nemotron'):
+        return ChatMLConfig(**kwargs)
     else:
         raise ValueError(f"Unknown model name: {model_name}")
 

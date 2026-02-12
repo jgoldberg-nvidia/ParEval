@@ -119,6 +119,10 @@ elif [[ \"\${MODEL_NAME}\" == *'phind'* ]] || [[ \"\${MODEL_NAME}\" == *'Phind'*
     INFERENCE_CONFIG='phind'
 elif [[ \"\${MODEL_NAME}\" == *'magicoder'* ]]; then
     INFERENCE_CONFIG='magicoder'
+elif [[ \"\${MODEL_NAME}\" == *'Nemotron'* ]]; then
+    INFERENCE_CONFIG='chatml'
+elif [[ \"\${MODEL_NAME}\" == *'CodeQwen'* ]] && [[ \"\${MODEL_NAME}\" == *'Chat'* ]]; then
+    INFERENCE_CONFIG='chatml'
 elif [[ \"\${MODEL_NAME}\" == *'qwen'* ]] || [[ \"\${MODEL_NAME}\" == *'Qwen'* ]]; then
     INFERENCE_CONFIG='qwen'
 else
