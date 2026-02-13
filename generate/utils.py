@@ -78,9 +78,11 @@ def clean_instruct_output(output: str, prompt: str, response_tag: str) -> str:
         raise ValueError(f"Response tag {response_tag} not found in output: {prompt}")
     output = output[prompt_loc + len(response_tag):].strip()
 
-    # 1. Find all code blocks enclosed in triple backticks with "c++" language tag
-    code_blocks = re.findall(r"```\n(.*?)\n```", output, flags=re.DOTALL)
-    code_blocks = [block.removeprefix("```").removeprefix("cpp").removeprefix('c++').removesuffix('```') for block in code_blocks]
+    # strip reasoning model think blocks
+    output = re.sub(r"<think>.*?</think>", "", output, flags=re.DOTALL).strip()
+
+    # 1. Find all code blocks enclosed in triple backticks (with optional language tag)
+    code_blocks = re.findall(r"```(?:\w+)?\n(.*?)\n```", output, flags=re.DOTALL)
 
     # 2. Prioritize code blocks containing the function definition from the prompt
     sub_prompt = prompt.rstrip().removesuffix(response_tag).rstrip().removesuffix("```").split("```")[-1]
